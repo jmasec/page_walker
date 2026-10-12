@@ -26,12 +26,21 @@ struct pagewlk_args{
 	int pid;
 };
 
+struct pagewlk_offsets{
+	int64_t pgd_offset;
+	int64_t pud_offset;
+	int64_t pmd_offset;
+	int64_t pt_offset;
+	int64_t phys_offset;
+};
+
 static int __init pw_init(void);
 static void __exit pw_exit(void);
 static int pw_open(struct inode *inode, struct file *file);
 static int pw_release(struct inode *inode, struct file *file);
 static long pw_ioctl(struct file *file, unsigned int cmd, unsigned long arg); 
 static int page_walker(struct pagewlk_args *pw_args);
+static void get_page_table_offsets(struct pagewlk_offsets *pw_offsets, unsigned long virt_addr);
 
 static const struct file_operations fops = {
 	.owner          = THIS_MODULE,
@@ -51,7 +60,24 @@ static int pw_release(struct inode *inode, struct file *file){
 	return 0;
 }
 
+static void get_page_table_offsets(struct pagewlk_offsets *pw_offsets, unsigned long virt_addr){
+	pw_offsets->pgd_offset = (virt_addr >> 39);
+	pw_offsets->pud_offset = (virt_addr >> 30);
+	pw_offsets->pmd_offset = (virt_addr >> 21);
+	pw_offsets->pt_offset = (virt_addr >> 12);
+	pw_offsets->phys_offset = virt_addr & 0xFFF;
+}
+
 static int page_walker(struct pagewlk_args *pw_args){
+	uint64_t cr3_val;
+	struct pagewlk_offsets pw_offsets; 
+
+	__asm__ volatile("mov %%cr3, %0" : "=r"(cr3_val));
+
+	uint64_t page_tbl_base = cr3_val & ~0xFFFUL;
+	
+	get_page_table_offsets(&pw_offset, pw_args->virt_addr);
+
 	return 0; 
 }
 
@@ -67,6 +93,10 @@ static long pw_ioctl(struct file *file, unsigned int cmd, unsigned long  arg){
 				return -EFAULT; 
 			}
 			pr_info("Virt Address: %lu and PID: %d\n", pw_args.virt_addr, pw_args.pid);
+			page_walker(&pw_args);
+			if(copy_to_user((struct pagewalk_args *)arg, &pw_args, sizeof(struct pagewlk_args))){
+				return -EFAULT; 
+			}
 			break;
 		default:
 			return -ENOTTY;	
