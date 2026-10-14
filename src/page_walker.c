@@ -6,6 +6,9 @@
 #include <linux/cdev.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/pid.h>
+#include <linux/sched.h>
+#include <linux/rcupdate.h>
 
 
 
@@ -41,6 +44,7 @@ static int pw_release(struct inode *inode, struct file *file);
 static long pw_ioctl(struct file *file, unsigned int cmd, unsigned long arg); 
 static int page_walker(struct pagewlk_args *pw_args);
 static void get_page_table_offsets(struct pagewlk_offsets *pw_offsets, unsigned long virt_addr);
+static struct task_struct* get_task_by_pid(int pid);
 
 static const struct file_operations fops = {
 	.owner          = THIS_MODULE,
@@ -68,15 +72,30 @@ static void get_page_table_offsets(struct pagewlk_offsets *pw_offsets, unsigned 
 	pw_offsets->phys_offset = virt_addr & 0xFFF;
 }
 
+static struct task_struct* get_task_by_pid(int pid){
+	struct task_struct *task = NULL;
+	struct pid *pid_struct = find_vpid(pid);
+	if(pid_struct){
+		task = pid_task(pid_struct, PIDTYPE_PID);
+
+		if(task){
+			get_task_struct(task);
+		} 
+	}
+	return task;
+}
+
 static int page_walker(struct pagewlk_args *pw_args){
-	uint64_t cr3_val;
-	struct pagewlk_offsets pw_offsets; 
-
-	__asm__ volatile("mov %%cr3, %0" : "=r"(cr3_val));
-
-	uint64_t page_tbl_base = cr3_val & ~0xFFFUL;
+	struct pagewlk_offsets pw_offsets;
 	
-	get_page_table_offsets(&pw_offset, pw_args->virt_addr);
+	get_page_table_offsets(&pw_offsets, pw_args->virt_addr);
+	struct task_struct *task = get_task_by_pid(pw_args->pid);
+
+	struct mm_struct *mm = task->mm;
+
+	// pgd
+	unsigned long val = pgd_val(*(mm->pgd + pw_offsets.pgd_offset));
+	pud_t *pud = val & 0x000FFFFFFFFFF000;	
 
 	return 0; 
 }
