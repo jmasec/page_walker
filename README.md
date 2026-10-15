@@ -2,9 +2,10 @@
 Linux Kernel Driver that converts virtual address of a process to physical address
 
 ## TODO
-- Add some error checking for incorrect pages 
-- Add support for 5 page level checking p4d
+- Add some error checking for pages that are not valid 
+- Check the flags of each page walk and handle them
 - Test on a running process that is not the controlled test process (use gdb to get the value manually to check test)
+- Write up about paging things
 
 ## Commands to build and test
 In test directory, it has a test target file that you can run and copy a controlled value within a known heap value. It will print out its PID and virtual address that the controlled value is at, it then hangs on a getchar to keep the process running
