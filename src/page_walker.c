@@ -18,6 +18,8 @@ MODULE_DESCRIPTION("Page Walker");
 MODULE_VERSION("0.1");
 
 #define PAGE_WALK _IOWR('p', 0, struct pagewlk_args)
+#define MASK 0x0000FFFFFFFFF000
+#define OFFSET_MASK 0x1FF
 
 dev_t dev = 0;
 static struct class *dev_class;
@@ -65,26 +67,40 @@ static int pw_release(struct inode *inode, struct file *file){
 }
 
 static void get_page_table_offsets(struct pagewlk_offsets *pw_offsets, unsigned long virt_addr){
-	pw_offsets->pgd_offset = (virt_addr >> 39);
-	pw_offsets->pud_offset = (virt_addr >> 30);
-	pw_offsets->pmd_offset = (virt_addr >> 21);
-	pw_offsets->pt_offset = (virt_addr >> 12);
+	pw_offsets->pgd_offset = (virt_addr >> 39) & OFFSET_MASK;
+	pr_info("PGD offset: %lu\n", pw_offsets->pgd_offset);
+	pw_offsets->pud_offset = (virt_addr >> 30) & OFFSET_MASK;
+	pr_info("PUD offset: %lu\n", pw_offsets->pud_offset);
+	pw_offsets->pmd_offset = (virt_addr >> 21) & OFFSET_MASK;
+	pr_info("PMD offset: %lu\n", pw_offsets->pmd_offset);
+	pw_offsets->pt_offset = (virt_addr >> 12) & OFFSET_MASK;
+	pr_info("PT offset: %lu\n", pw_offsets->pt_offset);
 	pw_offsets->phys_offset = virt_addr & 0xFFF;
+	pr_info("Page offset: %lu\n", pw_offsets->phys_offset);
 }
 
 static struct task_struct* get_task_by_pid(int pid){
 	struct task_struct *task = NULL;
-	struct pid *pid_struct = find_vpid(pid);
+
+	rcu_read_lock();	
+
+	struct pid *pid_struct = find_get_pid(pid);
 	if(pid_struct){
 		task = pid_task(pid_struct, PIDTYPE_PID);
 
 		if(task){
 			get_task_struct(task);
-		} 
+			pr_info("Found Task: %s (pid: %d)\n", task->comm, task->pid);
+		}
+
+		put_pid(pid_struct);
 	}
+
+	rcu_read_unlock();
 	return task;
 }
 
+// need to add checking for valid addresses, valid pages, etc 
 static int page_walker(struct pagewlk_args *pw_args){
 	struct pagewlk_offsets pw_offsets;
 	
@@ -94,9 +110,51 @@ static int page_walker(struct pagewlk_args *pw_args){
 	struct mm_struct *mm = task->mm;
 
 	// pgd
-	unsigned long val = pgd_val(*(mm->pgd + pw_offsets.pgd_offset));
-	pud_t *pud = val & 0x000FFFFFFFFFF000;	
+	unsigned long val_pgd = pgd_val(*(mm->pgd + pw_offsets.pgd_offset));
+	unsigned long pud_phys_addr = val_pgd & MASK;
+	
+	pr_info("PUD Phys Addr: %lx\n", val_pgd);	
 
+	pr_info("PUD Phys Mask Addr: %lx\n", pud_phys_addr);	
+	pud_t *pud = __va(pud_phys_addr);
+	
+	pr_info("PUD Virt Addr: %lx\n", (unsigned long)pud);
+	
+	// pud
+	unsigned long val_pud = pud_val(*(pud + pw_offsets.pud_offset));
+	unsigned long pmd_phys_addr = val_pud & MASK;
+
+	pr_info("PMD Phys Addr: %lx\n", val_pud);	
+
+	pr_info("PMD Phys Mask Addr: %lx\n", pmd_phys_addr);	
+	pmd_t *pmd = __va(pmd_phys_addr);
+	
+	pr_info("PMD Virt Addr: %lx\n", (unsigned long)pmd);
+	
+	// pmd
+	unsigned long val_pmd = pmd_val(*(pmd + pw_offsets.pmd_offset));
+	unsigned long pte_phys_addr = val_pmd & MASK;
+
+	pr_info("PTE Phys Addr: %lx\n", val_pmd);
+	
+	pr_info("PTE Phys Mask Addr: %lx\n", pte_phys_addr);	
+	pte_t *pte = __va(pte_phys_addr);
+
+	pr_info("PTE Phys Addr: %lx\n", (unsigned long)pte);	
+	// pte
+	unsigned long val_pte = pte_val(*(pte + pw_offsets.pt_offset));
+	unsigned long target_page = (val_pte & MASK) | pw_offsets.phys_offset;
+	
+	pr_info("Page Phys Addr: %lx\n", val_pte);	
+	pr_info("Page Phys Mask Addr: %lx\n", target_page);	
+	pr_info("Target PTE %lu\n", val_pte);
+	
+	void* page = __va(target_page);
+
+	pr_info("Values at Target Page %lx", *(unsigned long *)page);
+
+	pw_args->phys_addr = (unsigned long)page; 
+	
 	return 0; 
 }
 
@@ -111,7 +169,7 @@ static long pw_ioctl(struct file *file, unsigned int cmd, unsigned long  arg){
 		       if(copy_from_user(&pw_args, (struct pagewlk_args *)arg, sizeof(struct pagewlk_args))){
 				return -EFAULT; 
 			}
-			pr_info("Virt Address: %lu and PID: %d\n", pw_args.virt_addr, pw_args.pid);
+			pr_info("Virt Address: %lx and PID: %d\n", pw_args.virt_addr, pw_args.pid);
 			page_walker(&pw_args);
 			if(copy_to_user((struct pagewalk_args *)arg, &pw_args, sizeof(struct pagewlk_args))){
 				return -EFAULT; 
